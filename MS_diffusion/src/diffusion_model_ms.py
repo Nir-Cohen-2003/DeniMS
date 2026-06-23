@@ -139,18 +139,41 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
 
                 if self.embeddings_type == "ms2fp":
                     output_dim = state_dict["out_mlp.2.bias"].shape[0]
+                    hidden_dim = state_dict["ms_encoder.proj"].shape[0]
                 else:
-                    output_dim = state_dict["ms_encoder.proj"].shape[1]
+                    # proj has shape [hidden_dim, embeddings_dim]
+                    proj = state_dict["ms_encoder.proj"]
+                    hidden_dim = proj.shape[0]
+                    output_dim = proj.shape[1]
 
                 is_graph = any("graph_encoder" in k for k in state_dict.keys())
                 fp_pred = any("out_mlp" in k for k in state_dict.keys())
                 trainable_temperature = any("inv_temperature" in k for k in state_dict.keys())
 
+                # Infer number of transformer layers from the state_dict so the
+                # reconstructed encoder matches the saved weights.
+                layer_keys = [k for k in state_dict.keys()
+                              if k.startswith("ms_encoder.transformer_encoder.layers.")]
+                num_layers = 0
+                for k in layer_keys:
+                    try:
+                        idx = int(k.split("ms_encoder.transformer_encoder.layers.")[1].split(".")[0])
+                    except (ValueError, IndexError):
+                        continue
+                    if idx + 1 > num_layers:
+                        num_layers = idx + 1
+
+                # nhead is not encoded in the state_dict shapes; default to 8
+                # (matches the historical hardcoded value and the train.py
+                # default). For non-default configurations callers should
+                # ensure the encoder was trained with a compatible nhead.
+                nhead = 8
+
                 self.ms_encoder_model = Contrastive_model(
-                    hidden_dim=512,
+                    hidden_dim=hidden_dim,
                     max_len=129,
-                    num_transformer_layers=3,
-                    nhead=8,
+                    num_transformer_layers=num_layers,
+                    nhead=nhead,
                     embeddings_dim=output_dim,
                     dropout=0.1,
                     input_dropout=0.1,
@@ -753,7 +776,14 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         print(f"top1 - {sum(top1_matches) / len(top1_matches)}")
         print(f"top10 - {sum(any_matches) / len(any_matches)}")
         print(f"top_tanimoto - {sum(top10_tanimoto_vals) / len(top10_tanimoto_vals)}")
-        print(f"top_MCES - {sum([i for i in top10_MCES_vals if i<1000]) / len([i for i in top10_MCES_vals if i<1000])}")
+        # Guard against zero-length lists: an undertrained e2e-smoke-test
+        # model can produce zero valid SMILES per test spectrum, which would
+        # otherwise trigger a ZeroDivisionError on the MCES mean.
+        valid_mces = [i for i in top10_MCES_vals if i < 1000]
+        if valid_mces:
+            print(f"top_MCES - {sum(valid_mces) / len(valid_mces)}")
+        else:
+            print("top_MCES - N/A (no valid molecules)")
         print (top1_matches)
         print (any_matches)
         print (top10_tanimoto_vals)

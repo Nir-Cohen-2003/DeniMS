@@ -139,15 +139,20 @@ def _main_impl(cfg: DictConfig):
 
     callbacks = []
     if cfg.train.save_model:
-        checkpoint_callback = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}",
-                                              filename='{epoch}',
-                                              monitor='val/epoch_NLL',
-                                              save_top_k=5,
-                                              mode='min',
-                                              every_n_epochs=1)
-        last_ckpt_save = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}", filename='last', every_n_epochs=1)
+        # NOTE: Using save_top_k=-1 / monitor=None so that resuming from a
+        # checkpoint with a different dirpath (e.g. finetune stage resuming
+        # from the graph2mol stage) still saves new checkpoints to the new
+        # dirpath. Without this, PyTorch Lightning's ModelCheckpoint would
+        # save the resumed "last" file to the OLD dirpath, which breaks
+        # multi-stage training pipelines. We use a single callback with
+        # filename='last' to write a stable `last.ckpt` file the next stage
+        # can resume from.
+        last_ckpt_save = ModelCheckpoint(dirpath=f"checkpoints/{cfg.general.name}",
+                                          filename='last',
+                                          save_top_k=-1,
+                                          monitor=None,
+                                          every_n_epochs=1)
         callbacks.append(last_ckpt_save)
-        callbacks.append(checkpoint_callback)
 
     use_gpu = cfg.general.gpus > 0 and torch.cuda.is_available()
     trainer = Trainer(gradient_clip_val=cfg.train.clip_grad,

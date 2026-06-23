@@ -1,0 +1,141 @@
+[workspace]
+authors = ["Nir <<>>"]
+channels = ["conda-forge"]
+name = "DeniMS"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[system-requirements]
+# NOTE: The system has CUDA 13.2 drivers, but conda-forge's pytorch-gpu packages
+# are not yet built against CUDA 13. We therefore target the highest CUDA
+# version available on conda-forge (12.9), which is forward-compatible with
+# CUDA 13.x drivers.
+cuda = "12.9"
+
+[tasks]
+# Data preparation -------------------------------------------------------------
+# Example:
+#   pixi run prep-data -input_parquet Preprocessing/fraghub/fraghub.parquet \
+#                      -generate_graph_dict -split_type random
+prep-data = "python Preprocessing/data_processing.py"
+
+# Generate a PyTorch-Geometric graph dictionary from a filtered parquet file.
+# Example:
+#   pixi run graph-dict -input_parquet Preprocessing/fraghub/fraghub_filtered.parquet \
+#                       -output_dict Preprocessing/fraghub/smiles_dict_fraghub.pt
+graph-dict = "python Preprocessing/generate_graph_dict.py"
+
+# Stage 1: Spectrum encoder pretraining -----------------------------------------
+# Example:
+#   pixi run train-encoder -mode contrastive \
+#       -data_path Preprocessing/fraghub/fraghub_filtered.parquet \
+#       -smiles_path Preprocessing/fraghub/smiles_dict_fraghub.pt \
+#       -split_path Preprocessing/fraghub/splits_fraghub_random.pkl \
+#       -trainable_temperature -comment "contrastive_fraghub"
+train-encoder = "python train.py"
+
+# Evaluate a trained spectrum encoder.
+# Example:
+#   pixi run eval-encoder -cp_name [cp_name] -mode contrastive \
+#       -data_path Preprocessing/fraghub/fraghub_filtered.parquet \
+#       -smiles_path Preprocessing/fraghub/smiles_dict_fraghub.pt \
+#       -split_path Preprocessing/fraghub/splits_fraghub_random.pkl \
+#       -total_samples 512
+eval-encoder = "python run_evaluation.py"
+
+# Stage 2: Graph2Mol diffusion pretraining (no MS conditioning) ----------------
+# Example:
+#   pixi run pretrain-diffusion \
+#       conditioning.embeddings_type=mol2emb \
+#       conditioning.embedding_model_path=[contrastive_cp_path] \
+#       train.finetune_ms_encoder=False
+pretrain-diffusion = { cmd = "python main.py", cwd = "MS_diffusion/src" }
+
+# Stage 3a: MS2Mol finetuning (MS-conditioned diffusion) -----------------------
+# Example:
+#   pixi run finetune-diffusion \
+#       conditioning.embeddings_type=ms2emb \
+#       conditioning.embedding_model_path=[contrastive_cp_path] \
+#       general.resume=[graph2mol_cp_path] \
+#       train.finetune_ms_encoder=True \
+#       train.lr=0.0001
+finetune-diffusion = { cmd = "python main.py", cwd = "MS_diffusion/src" }
+
+# Stage 3b: MS2Mol test-set inference ------------------------------------------
+# Example:
+#   pixi run test-inference \
+#       conditioning.embeddings_type=ms2emb \
+#       conditioning.embedding_model_path=[contrastive_cp_path] \
+#       general.test_only=[ms2mol_cp_path] \
+#       general.samples_to_generate='all' \
+#       train.finetune_ms_encoder=True
+test-inference = { cmd = "python main.py", cwd = "MS_diffusion/src" }
+
+# Apply the trained MS2Mol model to experimental data --------------------------
+# Example:
+#   pixi run apply-model \
+#       --model_checkpoint [path_to_model_ckpt.ckpt] \
+#       --experimental_parquet ../../Preprocessing/experimental/experimental.parquet \
+#       --output_dir ./inference_results \
+#       --num_repeats 50
+apply-model = { cmd = "python apply_model.py", cwd = "MS_diffusion/src" }
+
+# Stage 3c: Post-analysis notebook ---------------------------------------------
+post-analysis = { cmd = "jupyter notebook post_analysis.ipynb", cwd = "MS_diffusion" }
+
+# End-to-end smoke test --------------------------------------------------------
+# Build a tiny dataset (1000 train + 100 test spectra) for fast pipeline testing.
+# Requires Preprocessing/fraghub/fraghub.parquet (or fraghub_filtered.parquet)
+# to be present; if neither exists, prints a clear error pointing at Zenodo
+# record 19060052.
+test-prepare-data = "python tests/e2e/prepare_tiny_data.py"
+
+# Run the full MS2Mol training pipeline (encoder -> graph2mol -> ms2mol ->
+# inference) on the tiny dataset. Uses small models and 2 epochs, so it is not
+# scientifically meaningful, but validates that every stage runs end-to-end.
+test-e2e = "python tests/e2e/run_e2e_test.py"
+
+[dependencies]
+python = "3.10.*"
+
+# PyTorch GPU stack. The pinned pip wheels in requirements.txt are not
+# available on conda-forge, so we let conda-forge resolve the latest
+# GPU-enabled build compatible with the CUDA system requirement below.
+pytorch-gpu = ">=2.5.1"
+# torchvision and torchaudio are not imported by the project and are omitted.
+
+# Chemistry / graph libraries. The pinned versions in requirements.txt are
+# too old for the selected Python / CUDA stack, so we use the latest
+# compatible conda-forge versions.
+rdkit = "*"
+graph-tool = "*"
+
+# Core Python dependencies from requirements.txt
+ftfy = "*"
+packaging = "*"
+regex = "*"
+tqdm = "*"
+numpy = "==1.26.4"
+matplotlib = "*"
+pandas = "*"
+opencv = "*"
+wandb = "*"
+pyarrow = "*"
+hydra-core = "==1.3.2"
+omegaconf = "==2.3.0"
+opentsne = "*"
+pytorch-lightning = "==2.0.4"
+pulp = ">=2.7.0"
+# The PyPI package 'lmdb' corresponds to 'python-lmdb' on conda-forge.
+python-lmdb = "*"
+
+# Notebook support
+jupyter = "*"
+
+[pypi-dependencies]
+# These packages are either not available on conda-forge or not at the
+# required version. Their dependencies are satisfied by the conda-forge
+# packages above.
+albumentations = "==1.4.2"
+torch-geometric = "==2.3.1"
+myopic-mces = "==1.1.1"

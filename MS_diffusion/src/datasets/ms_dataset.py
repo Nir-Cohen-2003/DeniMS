@@ -121,18 +121,48 @@ class MSDatasetLMDB(Dataset):
 
                 if self.embeddings_type == "ms2fp":
                     output_dim = checkpoint['model']['out_mlp.2.bias'].shape[0]
-                
+
                 else:
-                    output_dim = checkpoint['model']['ms_encoder.proj'].shape[0]
+                    # proj has shape [hidden_dim, embeddings_dim]; use both dims
+                    proj = checkpoint['model']['ms_encoder.proj']
+                    hidden_dim = proj.shape[0]
+                    output_dim = proj.shape[1]
 
                 is_graph = any("graph_encoder" in submodule for submodule in checkpoint['model'].keys())
                 fp_pred = any("out_mlp" in submodule for submodule in checkpoint['model'].keys())
                 trainable_temperature = any("inv_temperature" in submodule for submodule in checkpoint['model'].keys())
 
-                self.model = Contrastive_model(hidden_dim = 512, num_transformer_layers = 3, embeddings_dim=output_dim, graph = is_graph, fp_pred = fp_pred, trainable_temperature = trainable_temperature).to("cuda")
+                # Infer number of transformer layers from the state_dict so the
+                # reconstructed encoder matches the saved weights.
+                layer_keys = [k for k in checkpoint['model'].keys()
+                              if k.startswith('ms_encoder.transformer_encoder.layers.')]
+                num_layers = 0
+                for k in layer_keys:
+                    try:
+                        idx = int(k.split('ms_encoder.transformer_encoder.layers.')[1].split('.')[0])
+                    except (ValueError, IndexError):
+                        continue
+                    if idx + 1 > num_layers:
+                        num_layers = idx + 1
+
+                # Default nhead to 8 (matches historical hardcoded value and the
+                # default in train.py). nhead is not encoded in the state_dict
+                # shapes, so we rely on a sensible default that divides
+                # hidden_dim for typical configurations.
+                nhead = 8
+
+                self.model = Contrastive_model(
+                    hidden_dim=hidden_dim,
+                    num_transformer_layers=num_layers,
+                    embeddings_dim=output_dim,
+                    graph=is_graph,
+                    fp_pred=fp_pred,
+                    trainable_temperature=trainable_temperature,
+                    nhead=nhead,
+                ).to("cuda")
                 self.model.load_state_dict(checkpoint['model'])
                 self.model.eval()
-            
+
             else:
                 raise Exception("No embedding model path were given")
 

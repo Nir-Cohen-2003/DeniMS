@@ -23,3 +23,9 @@ trial.ipynb
 
 !experimental.csv
 !experimental.parquet
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# End-to-end test artifacts (regenerated on demand)
+tests/e2e/data/
