@@ -43,6 +43,7 @@ desired_columns = [
     "cleaned_normalized_mz",
     "cleaned_normalized_intensity",
     "cleaned_fragment_formulas_str",
+    "clean_spectrum_formula_array",
     "spectral_information_score"
 ]
     
@@ -117,21 +118,38 @@ def filter_df(df):
     except Exception:
         use_tqdm = False
 
-    # Derive clean_spectrum_formula_array and num_clean_peaks
-    if use_tqdm:
-        # Short explanations for the progress bars
-        _tqdm.pandas(desc="Converting fragment formulas to arrays")
-        df["clean_spectrum_formula_array"] = df[
-            "cleaned_fragment_formulas_str"
-        ].progress_apply(formulas_to_arrays)
-
-        _tqdm.pandas(desc="Counting clean peaks per spectrum")
-        df["num_clean_peaks"] = df["cleaned_fragment_formulas_str"].progress_apply(len)
+    # Derive clean_spectrum_formula_array (if not already present) and num_clean_peaks.
+    # Pre-computed arrays are the preferred input; formula-string parsing is a
+    # fallback that runs only when the array column is missing.
+    if "clean_spectrum_formula_array" in df.columns:
+        print("  'clean_spectrum_formula_array' already present -- using pre-computed arrays.")
+        if "num_clean_peaks" not in df.columns:
+            if use_tqdm:
+                _tqdm.pandas(desc="Counting clean peaks per spectrum")
+                df["num_clean_peaks"] = df["clean_spectrum_formula_array"].progress_apply(len)
+            else:
+                df["num_clean_peaks"] = df["clean_spectrum_formula_array"].apply(len)
     else:
-        df["clean_spectrum_formula_array"] = df[
-            "cleaned_fragment_formulas_str"
-        ].apply(formulas_to_arrays)
-        df["num_clean_peaks"] = df["cleaned_fragment_formulas_str"].apply(len)
+        if "cleaned_fragment_formulas_str" not in df.columns:
+            raise ValueError(
+                "Neither 'clean_spectrum_formula_array' (pre-computed 9-element count "
+                "vectors) nor 'cleaned_fragment_formulas_str' (list of formula strings) "
+                "is present in the parquet. Supply one of them."
+            )
+        print("  'clean_spectrum_formula_array' missing -- deriving from 'cleaned_fragment_formulas_str'.")
+        if use_tqdm:
+            _tqdm.pandas(desc="Converting fragment formulas to arrays")
+            df["clean_spectrum_formula_array"] = df[
+                "cleaned_fragment_formulas_str"
+            ].progress_apply(formulas_to_arrays)
+
+            _tqdm.pandas(desc="Counting clean peaks per spectrum")
+            df["num_clean_peaks"] = df["cleaned_fragment_formulas_str"].progress_apply(len)
+        else:
+            df["clean_spectrum_formula_array"] = df[
+                "cleaned_fragment_formulas_str"
+            ].apply(formulas_to_arrays)
+            df["num_clean_peaks"] = df["cleaned_fragment_formulas_str"].apply(len)
 
     print("\n" + "=" * 60)
     print("Step 2/3: Applying basic filters")
