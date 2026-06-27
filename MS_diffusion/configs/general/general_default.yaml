@@ -18,6 +18,8 @@ chains_to_save: 5
 log_every_steps: 50
 number_chain_steps: 50        # Number of frames in each gif
 test_iterations: 50            # Number of test iterations for evaluation
+compute_mces: true
+mces_timeout_sec: 120   # set to null to disable timeout
 
 final_model_samples_to_generate: 32
 final_model_samples_to_save: 30

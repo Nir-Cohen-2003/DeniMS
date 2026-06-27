@@ -120,7 +120,10 @@ def _main_impl(cfg: DictConfig):
 
     train_metrics = TrainMolecularMetricsDiscreteEdges(dataset_infos)
 
-    sampling_metrics = SamplingMolecularMetricsEdges(dataset_infos, train_smiles)
+    sampling_metrics = SamplingMolecularMetricsEdges(
+        dataset_infos, train_smiles,
+        compute_mces=getattr(cfg.general, 'compute_mces', True),
+        mces_timeout_sec=getattr(cfg.general, 'mces_timeout_sec', 120))
     visualization_tools = MolecularVisualization(cfg.dataset.remove_h, dataset_infos=dataset_infos)
 
     model_kwargs = {

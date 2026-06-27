@@ -5,8 +5,3 @@ graph_dict_path: "Preprocessing/fraghub/smiles_dict_fraghub.pt"
 embedding_model_path: null
 splitting_path: "Preprocessing/fraghub/splits_fraghub_random.pkl" 
 load_subdata_dir: null
-
-# MS encoder settings (used when finetune_ms_encoder=True and training from scratch)
-ms_encoder_graph: False  # Enable graph encoder branch in MS encoder
-ms_encoder_initial_temperature: 30.0  # Initial temperature for contrastive loss
-ms_encoder_trainable_temperature: False  # Whether temperature is trainable

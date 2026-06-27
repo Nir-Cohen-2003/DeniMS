@@ -161,7 +161,7 @@ class SamplingMolecularMetrics(nn.Module):
 
 class SamplingMolecularMetricsEdges(nn.Module):
 
-    def __init__(self, dataset_infos, train_smiles):
+    def __init__(self, dataset_infos, train_smiles, compute_mces=True, mces_timeout_sec=120):
         super().__init__()
         di = dataset_infos
         self.generated_edge_dist = GeneratedEdgesDistribution(di.output_dims['E'])
@@ -174,11 +174,15 @@ class SamplingMolecularMetricsEdges(nn.Module):
 
         self.train_smiles = train_smiles
         self.dataset_info = di
+        self.compute_mces = compute_mces
+        self.mces_timeout_sec = mces_timeout_sec
 
 
     def forward(self, molecules: list, name, current_epoch, val_counter, local_rank, test=False, targets = None):
 
-        stability, rdkit_metrics, all_smiles, identical_list, tanimoto_list, mces_list = compute_molecular_metrics(molecules, targets, self.dataset_info)
+        stability, rdkit_metrics, all_smiles, identical_list, tanimoto_list, mces_list = compute_molecular_metrics(
+            molecules, targets, self.dataset_info,
+            compute_mces=self.compute_mces, mces_timeout_sec=self.mces_timeout_sec)
 
         print("Starting custom metrics")
 

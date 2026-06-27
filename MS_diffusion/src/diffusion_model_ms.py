@@ -94,6 +94,9 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
 
         # Optional ms2mol encoder for online embedding & finetuning
         self.finetune_ms_encoder = getattr(cfg.train, "finetune_ms_encoder", False)
+        self.freeze_diffusion = getattr(cfg.train, "freeze_diffusion", False)
+        if self.freeze_diffusion and not self.finetune_ms_encoder:
+            raise ValueError("train.freeze_diffusion=True requires train.finetune_ms_encoder=True.")
         self.embeddings_type = getattr(cfg.conditioning, "embeddings_type", None)
         self.ms_encoder_model = None
 
@@ -164,11 +167,11 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
 
             else:
                 output_dim = int(self.embeddings_dims)
-                is_graph = getattr(cfg.conditioning, "ms_encoder_graph", False)
+                is_graph = False
                 fp_pred = self.embeddings_type == "ms2fp"
 
-                initial_temperature = getattr(cfg.conditioning, "ms_encoder_initial_temperature", 30.0)
-                trainable_temperature = getattr(cfg.conditioning, "ms_encoder_trainable_temperature", False)
+                initial_temperature = 30.0
+                trainable_temperature = False
 
                 self.ms_encoder_model = Contrastive_model(
                     hidden_dim=512,
@@ -199,6 +202,9 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         self.limit_dist = utils.PlaceHolder(X=x_marginals, E=e_marginals,
                                             y=torch.ones(self.ydim_output) / self.ydim_output)
 
+        if self.freeze_diffusion:
+            self._freeze_non_encoder_params()
+
         self.save_hyperparameters(ignore=['train_metrics', 'sampling_metrics', 'ms_features', 'ms_dataframe', 'ms_graph_dict'])
         self.start_epoch_time = None
         self.train_iterations = None
@@ -207,6 +213,25 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
         self.number_chain_steps = cfg.general.number_chain_steps
         self.best_val_nll = 1e8
         self.val_counter = 0
+
+    def _freeze_non_encoder_params(self):
+        if self.ms_encoder_model is None:
+            raise ValueError("freeze_diffusion=True but ms_encoder_model is not initialized.")
+
+        trainable_count = 0
+        frozen_count = 0
+        for name, param in self.named_parameters():
+            if name.startswith("ms_encoder_model.ms_encoder."):
+                param.requires_grad = True
+                trainable_count += param.numel()
+            else:
+                param.requires_grad = False
+                frozen_count += param.numel()
+
+        print(
+            f"freeze_diffusion=True: training ms_encoder only "
+            f"({trainable_count:,} trainable params, {frozen_count:,} frozen)"
+        )
 
     def on_load_checkpoint(self, checkpoint):
 
@@ -223,7 +248,11 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
             saved_groups = len(opt_state.get('param_groups', []))
 
             expected_groups = 1
-            if self.finetune_ms_encoder and self.ms_encoder_model is not None:
+            if (
+                self.finetune_ms_encoder
+                and self.ms_encoder_model is not None
+                and not self.freeze_diffusion
+            ):
                 expected_groups = 2
 
             if saved_groups != expected_groups:
@@ -239,9 +268,20 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
                 checkpoint['lr_schedulers'] = []
             else:
                 saved_param_counts = [len(g.get('params', [])) for g in opt_state.get('param_groups', [])]
-                encoder_params_count = sum(1 for name, _ in self.named_parameters() if name.startswith("ms_encoder_model.") and _.requires_grad)
-                other_params_count = sum(1 for name, _ in self.named_parameters() if not name.startswith("ms_encoder_model.") and _.requires_grad)
-                
+                encoder_prefix = (
+                    "ms_encoder_model.ms_encoder."
+                    if self.freeze_diffusion
+                    else "ms_encoder_model."
+                )
+                encoder_params_count = sum(
+                    1 for name, param in self.named_parameters()
+                    if name.startswith(encoder_prefix) and param.requires_grad
+                )
+                other_params_count = sum(
+                    1 for name, param in self.named_parameters()
+                    if not name.startswith("ms_encoder_model.") and param.requires_grad
+                )
+
                 if expected_groups == 1:
                     expected_param_counts = [other_params_count + encoder_params_count]
                 else:
@@ -338,15 +378,9 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
             
             num_spectra_list.append(len(indices))
         
-
         sos_batch = torch.stack(sos_list, dim=0)  
-
-
         formula_array_batch = torch.stack(formula_array_list, dim=0)  
         mask_batch = torch.stack(mask_list, dim=0)  
-
-        print (f"formula_array_batch shape: {formula_array_batch.shape}")
-        print (f"mask_batch shape: {mask_batch.shape}")
         
         return sos_batch, formula_array_batch, mask_batch, num_spectra_list
 
@@ -439,6 +473,22 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
                 weight_decay=weight_decay,
             )
 
+        if self.freeze_diffusion:
+            encoder_params = [
+                param for name, param in self.named_parameters()
+                if param.requires_grad and name.startswith("ms_encoder_model.ms_encoder.")
+            ]
+            if not encoder_params:
+                raise ValueError(
+                    "freeze_diffusion=True but no trainable ms_encoder parameters found."
+                )
+            return torch.optim.AdamW(
+                encoder_params,
+                lr=ms_encoder_lr,
+                amsgrad=True,
+                weight_decay=weight_decay,
+            )
+
         # Split parameters into diffusion vs encoder groups.
         encoder_params = []
         other_params = []
@@ -450,10 +500,11 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
             else:
                 other_params.append(param)
 
-        param_groups = [
-            {"params": other_params, "lr": base_lr},
-            {"params": encoder_params, "lr": ms_encoder_lr},
-        ]
+        param_groups = []
+        if other_params:
+            param_groups.append({"params": other_params, "lr": base_lr})
+        if encoder_params:
+            param_groups.append({"params": encoder_params, "lr": ms_encoder_lr})
 
         return torch.optim.AdamW(
             param_groups,

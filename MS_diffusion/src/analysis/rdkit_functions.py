@@ -1,3 +1,6 @@
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
+
 import numpy as np
 import torch
 import re
@@ -21,6 +24,55 @@ except ModuleNotFoundError as e:
 from myopic_mces import MCES
 import pulp
 solver = pulp.listSolvers(onlyAvailable=True)[0]
+
+MCES_TIMEOUT_SEC = 120
+MCES_TIMEOUT_FALLBACK = 1000
+
+_mces_executor = None
+
+
+def _mces_compute_pair(smiles1, smiles2):
+    import pulp
+    from myopic_mces import MCES
+    mces_solver = pulp.listSolvers(onlyAvailable=True)[0]
+    return float(MCES(
+        smiles1, smiles2,
+        solver=mces_solver,
+        threshold=100,
+        always_stronger_bound=False,
+        solver_options=dict(msg=0),
+    )[1])
+
+
+def _reset_mces_executor():
+    global _mces_executor
+    if _mces_executor is not None:
+        _mces_executor.shutdown(wait=False, cancel_futures=True)
+        _mces_executor = None
+
+
+def compute_mces_with_timeout(smiles1, smiles2, timeout_sec=MCES_TIMEOUT_SEC):
+    if timeout_sec is None:
+        try:
+            return _mces_compute_pair(smiles1, smiles2)
+        except Exception:
+            return MCES_TIMEOUT_FALLBACK
+
+    global _mces_executor
+    if _mces_executor is None:
+        _mces_executor = ProcessPoolExecutor(
+            max_workers=1, mp_context=mp.get_context("spawn"))
+    try:
+        future = _mces_executor.submit(_mces_compute_pair, smiles1, smiles2)
+        return future.result(timeout=timeout_sec)
+    except FuturesTimeoutError:
+        _reset_mces_executor()
+        _mces_executor = ProcessPoolExecutor(
+            max_workers=1, mp_context=mp.get_context("spawn"))
+        return MCES_TIMEOUT_FALLBACK
+    except Exception:
+        return MCES_TIMEOUT_FALLBACK
+
 
 from utils import *
 
@@ -52,11 +104,11 @@ def fix_aromatic_smiles(smiles: str) -> str:
 
 
 class BasicMolecularMetrics(object):
-    def __init__(self, dataset_info, targets=None):
+    def __init__(self, dataset_info, targets=None, compute_mces=True, mces_timeout_sec=MCES_TIMEOUT_SEC):
         self.atom_decoder = dataset_info.atom_decoder
         self.dataset_info = dataset_info
-
-        # Retrieve dataset smiles only for qm9 currently.
+        self.compute_mces = compute_mces
+        self.mces_timeout_sec = mces_timeout_sec
         self.dataset_smiles_list = targets
 
     def compute_validity(self, generated):
@@ -132,8 +184,11 @@ class BasicMolecularMetrics(object):
             fp2 = AllChem.GetMorganFingerprintAsBitVect(mol2, 2)
             tanimoto_list.append(TanimotoSimilarity(fp1, fp2))
 
-            # Calculate MCES
-            MCES_list.append(MCES(smiles1[idx], smiles2[idx], solver=solver, threshold=100, always_stronger_bound=False, solver_options=dict(msg=0))[1])
+            if self.compute_mces:
+                MCES_list.append(compute_mces_with_timeout(
+                    smiles1[idx], smiles2[idx], timeout_sec=self.mces_timeout_sec))
+            else:
+                MCES_list.append(1000)
             valid_pairs += 1
 
         # Calculate results
@@ -423,7 +478,7 @@ def check_stability(atom_types, edge_types, dataset_info, debug=False,atom_decod
     return molecule_stable, n_stable_bonds, len(atom_types)
 
 
-def compute_molecular_metrics(molecule_list, targets, dataset_info):
+def compute_molecular_metrics(molecule_list, targets, dataset_info, compute_mces=True, mces_timeout_sec=MCES_TIMEOUT_SEC):
     """ molecule_list: (dict) """
 
     if not dataset_info.remove_h:
@@ -452,7 +507,8 @@ def compute_molecular_metrics(molecule_list, targets, dataset_info):
     else:
         validity_dict = {'mol_stable': -1, 'atm_stable': -1}
 
-    metrics = BasicMolecularMetrics(dataset_info, targets)
+    metrics = BasicMolecularMetrics(
+        dataset_info, targets, compute_mces=compute_mces, mces_timeout_sec=mces_timeout_sec)
     rdkit_metrics = metrics.evaluate(molecule_list)
     all_smiles = rdkit_metrics[-1]
     identical_list = rdkit_metrics[-4]

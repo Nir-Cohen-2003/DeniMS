@@ -1,5 +1,5 @@
 # Training settings
-n_epochs: 4000
+n_epochs: 10000
 batch_size: 64
 lr: 0.0002
 clip_grad: null          # float, null to disable
@@ -17,4 +17,5 @@ embedding_noise_variance: 0.01  # Variance of the Gaussian noise (mean is 0)
 
 # Optional MS encoder finetuning
 finetune_ms_encoder: True    # If True, use ms2mol encoder during diffusion training and finetune it end-to-end
+freeze_diffusion: False      # If True, keep diffusion frozen and train only ms_encoder (requires finetune_ms_encoder=True)
 ms_encoder_lr: null           # Optional separate LR for the MS encoder; if null, reuse train.lr
