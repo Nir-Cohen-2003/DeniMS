@@ -64,11 +64,11 @@ They are exposed as pixi tasks in the `data-prep` environment:
 
 ```bash
 # Training data: spectral library -> DeniMS training parquet
-pixi run -e data-prep convert-training path/to/library.msp \
+pixi run -e data-prep convert-training ./sample_data/example.msp \
     -o Preprocessing/fraghub/fraghub_denims_training.parquet
 
 # Inference data: mzML -> DeniMS inference parquet
-pixi run -e data-prep convert-inference path/to/run.mzML \
+pixi run -e data-prep convert-inference ./sample_data/example.mzML \
     -o Preprocessing/experimental/experimental.parquet
 ```
 
