@@ -215,8 +215,6 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
                                                               timesteps=cfg.model.diffusion_steps)
 
         node_types = self.dataset_info.node_types.float()
-        x_marginals = node_types / torch.sum(node_types)
-
         edge_types = self.dataset_info.edge_types.float()
         e_marginals = edge_types / torch.sum(edge_types)
         print(f"Marginal distribution of the classes: {x_marginals} for nodes, {e_marginals} for edges")
@@ -224,7 +222,6 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
                                                             y_classes=self.ydim_output)
         self.limit_dist = utils.PlaceHolder(X=x_marginals, E=e_marginals,
                                             y=torch.ones(self.ydim_output) / self.ydim_output)
-
         if self.freeze_diffusion:
             self._freeze_non_encoder_params()
 
@@ -1058,10 +1055,9 @@ class DiscreteEdgesDenoisingDiffusion(pl.LightningModule):
 
         else:
             X = data[batch_id][0].X[:batch_size]
-            max_nodes = X.shape[1]
             n_nodes = X.any(dim=2).sum(dim=1)
 
-        n_max = torch.max(n_nodes).item()
+        n_max = X.shape[1] if data is not None else int(torch.max(n_nodes).item())
 
         # Build the masks
         arange = torch.arange(n_max, device=self.device).unsqueeze(0).expand(batch_size, -1)
